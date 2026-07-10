@@ -238,7 +238,6 @@ def extract_meaningful_keywords(text: str) -> set[str]:
 
 def find_known_skills(text: str) -> set[str]:
     text_lower = text.lower()
-
     all_skills = TECHNICAL_SKILLS | SOFT_SKILLS
 
     return {
@@ -276,6 +275,9 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 
         return "\n".join(pages)
 
+    except ValueError:
+        raise
+
     except Exception as exc:
         logger.exception("PDF extraction failed")
         raise ValueError("Could not read the PDF file") from exc
@@ -284,7 +286,6 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
 def extract_text_from_docx(file_bytes: bytes) -> str:
     try:
         document = Document(BytesIO(file_bytes))
-
         content = []
 
         for paragraph in document.paragraphs:
@@ -324,7 +325,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
     score = 0
     feedback = []
 
-    # Contact information: 10 points
     email_found = bool(
         re.search(
             r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
@@ -349,7 +349,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
     else:
         feedback.append("Add a contact phone number")
 
-    # Core sections: 35 points
     core_sections = {
         "experience": 10,
         "education": 10,
@@ -370,7 +369,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
         else:
             feedback.append(section_feedback[section])
 
-    # Projects: 10 points
     if sections.get("projects"):
         score += 10
     else:
@@ -378,9 +376,7 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
             "Add a projects section to demonstrate practical experience"
         )
 
-    # Relevant skills: 15 points
     detected_skills = find_known_skills(text)
-
     skill_count = len(detected_skills)
 
     if skill_count >= 8:
@@ -400,7 +396,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
             "Add specific technical and professional skills"
         )
 
-    # Action-oriented writing: 10 points
     action_verb_count = sum(
         1
         for verb in ACTION_VERBS
@@ -419,7 +414,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
             "Describe achievements with action verbs such as developed, built, improved, or implemented"
         )
 
-    # Quantifiable achievements: 10 points
     measurable_patterns = re.findall(
         r"\b\d+(?:\.\d+)?\s?(?:%|percent|users?|clients?|projects?|hours?|days?|months?|years?|r|zar|\$|£|€)\b",
         text_lower,
@@ -437,7 +431,6 @@ def calculate_resume_strength(text: str) -> tuple[int, list[str]]:
             "Add measurable achievements using numbers, percentages, or results"
         )
 
-    # Content depth: 10 points
     word_count = len(extract_words(text))
 
     if 300 <= word_count <= 1200:
@@ -470,7 +463,6 @@ def calculate_ats_compatibility(text: str) -> tuple[int, list[str]]:
     score = 0
     feedback = []
 
-    # Readable extracted text: 20 points
     word_count = len(extract_words(text))
 
     if word_count >= 300:
@@ -486,7 +478,6 @@ def calculate_ats_compatibility(text: str) -> tuple[int, list[str]]:
             "The resume contains very little readable text"
         )
 
-    # Standard section headings: 30 points
     standard_sections = [
         "experience",
         "education",
@@ -516,7 +507,6 @@ def calculate_ats_compatibility(text: str) -> tuple[int, list[str]]:
             "Use a standard Skills or Technical Skills heading"
         )
 
-    # Contact details: 15 points
     email_found = bool(
         re.search(
             r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
@@ -545,7 +535,6 @@ def calculate_ats_compatibility(text: str) -> tuple[int, list[str]]:
             "Add a clearly readable phone number"
         )
 
-    # Skills and keywords: 20 points
     detected_skills = find_known_skills(text)
     skill_count = len(detected_skills)
 
@@ -564,9 +553,11 @@ def calculate_ats_compatibility(text: str) -> tuple[int, list[str]]:
             "The resume needs more searchable role-specific keywords"
         )
 
-    # Bullet and achievement signals: 15 points
     bullet_count = len(
-        re.findall(r"(?:^|\n)\s*[•●▪◦*-]\s+", text)
+        re.findall(
+            r"(?:^|\n)\s*[•●▪◦*-]\s+",
+            text,
+        )
     )
 
     achievement_count = len(
@@ -631,7 +622,6 @@ def calculate_job_match(
 
     feedback = []
 
-    # General keyword coverage: 45%
     if job_keywords:
         keyword_matches = cv_keywords.intersection(job_keywords)
 
@@ -641,7 +631,6 @@ def calculate_job_match(
     else:
         keyword_score = 0
 
-    # Known skill coverage: 40%
     if job_skills:
         matched_skills = cv_skills.intersection(job_skills)
 
@@ -664,7 +653,6 @@ def calculate_job_match(
     else:
         skill_score = keyword_score
 
-    # Job-title / role terminology overlap: 15%
     role_terms = {
         word
         for word in job_keywords
@@ -802,9 +790,16 @@ async def upload_cv(
                 detail=str(exc),
             ) from exc
 
-        text = normalise_text(text)
+        # Preserve the original extracted structure for the
+        # improved-resume editor and PDF feature.
+        original_resume_text = text.strip()
 
-        if len(text) < MIN_EXTRACTED_TEXT_LENGTH:
+        # Use a separate normalised copy for scoring.
+        analysis_text = normalise_text(
+            original_resume_text
+        )
+
+        if len(analysis_text) < MIN_EXTRACTED_TEXT_LENGTH:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -814,16 +809,20 @@ async def upload_cv(
             )
 
         resume_score, resume_feedback = (
-            calculate_resume_strength(text)
+            calculate_resume_strength(
+                analysis_text
+            )
         )
 
         ats_score, ats_feedback = (
-            calculate_ats_compatibility(text)
+            calculate_ats_compatibility(
+                analysis_text
+            )
         )
 
         job_match_score, job_feedback = (
             calculate_job_match(
-                text,
+                analysis_text,
                 clean_job_description,
             )
         )
@@ -840,6 +839,7 @@ async def upload_cv(
             "feedback": feedback,
             "ats_score": ats_score,
             "job_match_score": job_match_score,
+            "original_resume": original_resume_text,
         }
 
     except HTTPException:
